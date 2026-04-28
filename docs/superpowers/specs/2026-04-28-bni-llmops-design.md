@@ -121,6 +121,8 @@ llmops.register_prompt(
 llmops.set_alias("agent_tujuan", alias="staging", version=3)
 ```
 
+**Idempotency contract (SDK-level, not CLI-level):** `register_prompt` is idempotent. If the `(name, template)` pair matches the latest existing version, no new version is created and the existing version is returned. This contract lives in `prompts.py` — not in the CLI. The CLI `register-prompts` command iterates over YAML files and calls `register_prompt` for each; idempotency is enforced once, at the SDK layer, so direct SDK callers and CLI users get identical behavior.
+
 **Initialization model:** **Implicit only.** No `init()` function. Configuration via environment variables, read lazily on first SDK call. Selected because it minimizes integration friction.
 
 **Required env vars (validated at first call, fail-loud if missing):**
@@ -206,7 +208,9 @@ mlflow server \
 |---|---|---|---|
 | `ci.yml` | `pull_request: branches: [gos-dev]` | ruff check + ruff format check + pytest + prompt YAML schema validate + `uv sync --python 3.14.4` | ≤ 3 min |
 | `register-prompts.yml` | `push: branches: [gos-dev]` | Diff prompts/, register changed versions, set `staging` alias, comment summary | ≤ 5 min |
-| `promote.yml` | `workflow_dispatch` (inputs: `prompt_name`, `from_alias`, `to_alias`) | Set alias, write audit tags, log to MLflow | ≤ 1 min |
+| `promote.yml` | `workflow_dispatch` (inputs: `prompt_name`, `from_alias`, `to_alias`) | Shells out to `uv run llmops promote ...` — single code path | ≤ 1 min |
+
+**Single audit-tag writer:** the `promote.yml` workflow does NOT contain its own MLflow client logic. It runs `uv run llmops promote <name> <from> <to>`, which calls `prompts.set_alias()` which writes the audit tags (Section 5.3). The CLI command and the workflow are NOT two parallel implementations — they share `src/llmops/cli.py` → `prompts.set_alias()`. This eliminates risk of audit-tag drift.
 
 **Runner setup:** uses `astral-sh/setup-uv@v3` + `actions/setup-python@v5` with `python-version: "3.14.4"`. `uv` caches via `actions/cache`.
 
@@ -249,7 +253,9 @@ Run via `uv run llmops <command>`.
 | `llmops.sdk_version` | `bni-llmops` package version | Identify which SDK build produced trace |
 | `llmops.git_sha` | env var `GIT_SHA` if set | Link trace to caller's deployed commit |
 | `llmops.session_id` | provided by caller or UUID4 auto | Group multi-agent run together |
-| `llmops.prompt_versions` | dict `{name: version}` from `load_prompt` calls | Know exactly which prompt versions ran |
+| `llmops.prompt_versions` | JSON-serialized dict `{name: version}`, accumulated via thread-local across `load_prompt` calls inside a run, written once on outermost trace context exit | Know exactly which prompt versions ran |
+
+**`llmops.prompt_versions` mechanics (locked):** Run-level tags in MLflow are flat string key/value pairs. To capture multiple prompt versions used during a single run, the SDK keeps a thread-local `dict[str, int]` that accumulates `(name, version)` entries on each `load_prompt(name@alias)` call. When the **outermost** `trace_agent` context exits, the SDK serializes the dict to a JSON string and writes it as the run tag `llmops.prompt_versions`. This guarantees one consistent value per run, regardless of how many prompts were loaded. Nested `trace_agent` contexts share the same thread-local dict and do NOT write the tag (only the outermost does).
 
 ### 5.3 Promotion audit tags (auto-set on prompt versions during `promote`)
 
@@ -381,6 +387,8 @@ Three workflows per Section 4.4 with all triggers wired to `gos-dev`.
 8. `uv run llmops promote agent_tujuan staging production` → audit tags written
 9. **Total wall-clock onboarding ≤ 30 minutes** for a colleague new to the repo.
 
+**Note on step 7:** the PR → merge cycle requires a reviewer. The 30-minute budget covers steps 1–6 (technical setup) and step 8 (CLI promote, ~10 seconds). Step 7's review wait time is human-loop and excluded from the technical onboarding budget. If validating end-to-end without waiting on review, step 7 can be substituted with a direct push to `gos-dev` in a sandbox repo.
+
 ---
 
 ## 9. Risks & Implementation-Time Validations
@@ -499,12 +507,14 @@ tags:                                   # optional dict[str, str]
   owner: <colleague_handle>
 ```
 
+**Template semantics (locked):** Templates use **variable-substitution-only** semantics with `{{ var }}` syntax — Jinja-flavored placeholder form, but **no control flow, no filters, no conditionals, no loops**. This matches MLflow Prompt Registry's `Prompt.format(**vars)` runtime behavior. Implementation can use a simple regex extractor + `str.replace` or MLflow's built-in formatter; either is acceptable as long as no Jinja-only feature is used.
+
 **Validation rules (pydantic + custom validator):**
 1. `schema_version == 1`.
 2. `name` matches `^[a-z][a-z0-9_]*$`.
 3. File name without extension equals `name`.
 4. Every `{{ identifier }}` in `template` appears in `variables`.
-5. Every entry in `variables` appears at least once as `{{ entry }}` in `template`.
+5. Every entry in `variables` appears at least once as `{{ entry }}` in `template`. (Safe under variable-substitution-only semantics — no `{% if %}` blocks where a variable might be conditionally referenced.)
 6. `description` length ≥10.
 7. `tags` keys/values are strings; no nested structures.
 
