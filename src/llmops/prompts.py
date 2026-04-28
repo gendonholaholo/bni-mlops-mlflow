@@ -83,27 +83,40 @@ def register_prompt(
     template: str,
     commit_message: str | None = None,
     tags: dict[str, str] | None = None,
+    model_config: dict[str, Any] | None = None,
 ) -> Any:
     """Register a new prompt version. Idempotent (v1 strategy): if any of the
-    `staging` or `production` aliases points at a version whose template equals
-    the new template, return that version without creating a new one.
+    `staging` or `production` aliases points at a version whose template AND
+    model_config equal the new ones, return that version without creating a
+    new one.
+
+    Issue #2: model_config (generation hyperparameters dict) participates in
+    the idempotence check, so changing temperature/top_k/etc. produces a new
+    version (rollback-able via set_alias).
 
     Note: a more thorough check (search ALL versions) is v2 work — the search API
     surface needs validation against MLflow 3.11.x first.
     """
     adapter = _get_adapter()
 
-    existing = None
     for try_alias in ("staging", "production"):
         try:
             existing = adapter.load_prompt(name=name, alias=try_alias)
-            if existing.template == template:
-                return existing
         except Exception:  # noqa: BLE001
             continue
+        if existing.template != template:
+            continue
+        existing_mc = getattr(existing, "model_config", None) or None
+        wanted_mc = model_config or None
+        if existing_mc == wanted_mc:
+            return existing
 
     return adapter.register_prompt(
-        name=name, template=template, commit_message=commit_message, tags=tags
+        name=name,
+        template=template,
+        commit_message=commit_message,
+        tags=tags,
+        model_config=model_config,
     )
 
 

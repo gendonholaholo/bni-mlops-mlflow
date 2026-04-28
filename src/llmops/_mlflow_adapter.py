@@ -18,6 +18,9 @@ class _PromptObj(Protocol):
     name: str
     version: int
     template: str
+    # NOTE: PromptVersion also exposes ``.model_config`` (MLflow 3.8+) when the
+    # prompt was registered with one. We don't declare it on the Protocol because
+    # not every consumer / mock path supplies it; callers use getattr fallback.
 
     def format(self, **vars: Any) -> str: ...  # noqa: A002
 
@@ -45,12 +48,16 @@ class MLflowAdapter:
         template: str,
         commit_message: str | None = None,
         tags: dict[str, str] | None = None,
+        model_config: dict[str, Any] | None = None,
     ) -> _PromptObj:
+        # ``model_config`` is the canonical MLflow 3.8+ field for versioning
+        # generation hyperparameters alongside the prompt template (Issue #2).
         return mlflow.genai.register_prompt(
             name=name,
             template=template,
             commit_message=commit_message,
             tags=tags,
+            model_config=model_config,
         )
 
     def load_prompt(
@@ -65,8 +72,10 @@ class MLflowAdapter:
         return mlflow.genai.load_prompt(name_or_uri=uri)
 
     def set_alias(self, name: str, alias: str, version: int) -> None:
-        # NOTE: this lives on mlflow.* (root namespace), NOT mlflow.genai.*
-        mlflow.set_prompt_alias(name, alias, version)
+        # MLflow 3.x moved prompt-registry APIs into the genai namespace.
+        # The root-level ``mlflow.set_prompt_alias`` still works in 3.11.x but
+        # emits a FutureWarning on every call — use ``mlflow.genai`` directly.
+        mlflow.genai.set_prompt_alias(name, alias, version)
 
     def write_prompt_version_tags(self, name: str, version: int, tags: dict[str, str]) -> None:
         """Write each (key, value) in `tags` as a tag on the given prompt version

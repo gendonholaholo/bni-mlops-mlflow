@@ -21,10 +21,32 @@ def test_good_yaml_parses() -> None:
     assert p.name == "agent_demo"
 
 
-def test_schema_version_must_be_1() -> None:
-    bad = _good() | {"schema_version": 2}
+def test_schema_version_2_accepted_for_model_config() -> None:
+    """Schema bumped to 2 (Issue #2) to allow optional model_config block."""
+    p = PromptYAML(
+        **(_good() | {"schema_version": 2, "model_config": {"temperature": 0.7, "top_k": 40}})
+    )
+    assert p.mlflow_model_config == {"temperature": 0.7, "top_k": 40}
+
+
+def test_schema_version_3_rejected() -> None:
+    bad = _good() | {"schema_version": 3}
     with pytest.raises(Exception):  # noqa: B017
         PromptYAML(**bad)
+
+
+def test_model_config_requires_schema_version_2() -> None:
+    """Setting model_config under schema_version: 1 must fail with a clear error."""
+    bad = _good() | {"model_config": {"temperature": 0.7}}
+    with pytest.raises(Exception, match="schema_version >= 2"):
+        PromptYAML(**bad)
+
+
+def test_v1_without_model_config_still_works() -> None:
+    """Backward-compat: existing v1 prompts (no model_config) keep parsing."""
+    p = PromptYAML(**_good())
+    assert p.schema_version == 1
+    assert p.mlflow_model_config is None
 
 
 def test_name_regex_enforced() -> None:
