@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import threading
 from contextlib import ContextDecorator
@@ -89,6 +90,9 @@ class trace_agent(ContextDecorator):  # noqa: N801 (intentional lowercase API su
                 stack.pop()
             status = "ERROR" if exc_type else "OK"
             if self._is_root and self._trace_handle is not None:
+                # Flush accumulated prompt_versions BEFORE ending the trace,
+                # so the tag attaches to the still-active run.
+                self._flush_prompt_versions()
                 self._client.end_trace(trace_id=self._trace_handle.trace_id, status=status)
             elif self._span is not None:
                 self._client.end_span(
@@ -98,3 +102,23 @@ class trace_agent(ContextDecorator):  # noqa: N801 (intentional lowercase API su
                 )
         except Exception as e:  # noqa: BLE001
             _log.warning("llmops trace_agent('%s') end failed: %r", self.name, e)
+
+    def _flush_prompt_versions(self) -> None:
+        """Serialize the thread-local prompt_versions dict and write it as a run tag.
+        Always resets the accumulator at the end (success or failure)."""
+        # Lazy import to avoid prompts <-> tracing circular import at module load
+        from llmops import prompts as _prompts  # noqa: PLC0415
+
+        try:
+            versions = _prompts.get_loaded_versions()
+            if versions:
+                from mlflow import set_tag as _set_tag  # noqa: TID253, PLC0415
+
+                _set_tag("llmops.prompt_versions", _json.dumps(versions, sort_keys=True))
+        except Exception as e:  # noqa: BLE001
+            _log.warning("prompt_versions tag write failed: %r", e)
+        finally:
+            import contextlib as _contextlib  # noqa: PLC0415
+
+            with _contextlib.suppress(Exception):
+                _prompts.reset_loaded_versions()

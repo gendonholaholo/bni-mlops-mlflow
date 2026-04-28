@@ -107,6 +107,51 @@ def test_register_prompt_creates_new_when_template_changes(
     assert genai.register_prompt.called
 
 
+def test_prompt_versions_tag_written_on_outer_trace_exit(
+    fake_mlflow_for_prompts: dict[str, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """load_prompt accumulates name->version into thread-local; outermost
+    trace_agent serializes to JSON and writes as `llmops.prompt_versions` tag."""
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://x:5001")
+    sys.modules.pop("llmops._config", None)
+    sys.modules.pop("llmops.tracing", None)
+    sys.modules.pop("llmops.prompts", None)
+
+    # tracing.py uses MlflowClient via the fake mlflow module; ensure MlflowClient
+    # is wired so __enter__/__exit__ + the prompt-versions flush all hit the same client
+    client_mock = MagicMock()
+    client_mock.start_trace.return_value = types.SimpleNamespace(trace_id="r1", span_id="s1")
+    fake_mlflow_for_prompts["mlflow"].MlflowClient = MagicMock(return_value=client_mock)
+
+    from llmops.prompts import load_prompt
+    from llmops.tracing import trace_agent
+
+    genai = fake_mlflow_for_prompts["genai"]
+    genai.load_prompt.side_effect = [
+        types.SimpleNamespace(name="agent_tujuan", version=2, template="t"),
+        types.SimpleNamespace(name="agent_rilis", version=5, template="t"),
+    ]
+
+    with trace_agent("orch"):
+        with trace_agent("agent_tujuan"):
+            load_prompt("agent_tujuan@production")
+        with trace_agent("agent_rilis"):
+            load_prompt("agent_rilis@production")
+
+    # End-of-outer-trace must have written llmops.prompt_versions via mlflow.set_tag
+    set_tag = fake_mlflow_for_prompts["mlflow"].set_tag
+    calls = [c for c in set_tag.call_args_list if c.args and c.args[0] == "llmops.prompt_versions"]
+    assert len(calls) == 1, (
+        f"expected 1 prompt_versions tag, got {len(calls)}: {set_tag.call_args_list}"
+    )
+    payload = calls[0].args[1]
+    import json as _j
+
+    parsed = _j.loads(payload)
+    assert parsed == {"agent_tujuan": 2, "agent_rilis": 5}
+
+
 def test_set_alias_writes_audit_tags(
     fake_mlflow_for_prompts: dict[str, MagicMock],
     monkeypatch: pytest.MonkeyPatch,

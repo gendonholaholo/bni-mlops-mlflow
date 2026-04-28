@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import threading
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,6 +18,22 @@ from llmops.exceptions import LLMOpsPromptNotFoundError
 
 _adapter: MLflowAdapter | None = None
 _PROMPT_REF = re.compile(r"^([a-z][a-z0-9_]*)([@/])(.+)$")
+
+_tl = threading.local()
+
+
+def _record_loaded(name: str, version: int) -> None:
+    if not hasattr(_tl, "versions"):
+        _tl.versions = {}
+    _tl.versions[name] = version
+
+
+def get_loaded_versions() -> dict[str, int]:
+    return dict(getattr(_tl, "versions", {}))
+
+
+def reset_loaded_versions() -> None:
+    _tl.versions = {}
 
 
 def _get_adapter() -> MLflowAdapter:
@@ -45,16 +62,20 @@ def load_prompt(ref: str) -> Any:
 
     Returns an object with `.template` and `.format(**vars)`.
     Raises LLMOpsPromptNotFoundError if the prompt or alias does not exist.
+    Side effect: records (prompt.name, prompt.version) into thread-local accumulator
+    that trace_agent flushes at outermost exit.
     """
     name, alias, version = _parse_ref(ref)
     adapter = _get_adapter()
     try:
-        return adapter.load_prompt(name=name, alias=alias, version=version)
+        prompt = adapter.load_prompt(name=name, alias=alias, version=version)
     except Exception as e:  # noqa: BLE001
         msg = str(e).upper()
         if "DOES_NOT_EXIST" in msg or "NOT_FOUND" in msg or "RESOURCE_DOES_NOT_EXIST" in msg:
             raise LLMOpsPromptNotFoundError(name, alias=alias, version=version) from e
         raise
+    _record_loaded(prompt.name, prompt.version)
+    return prompt
 
 
 def register_prompt(
