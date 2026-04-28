@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import ContextDecorator
 from typing import Any
 
@@ -11,6 +12,7 @@ from llmops._mlflow_adapter import MLflowAdapter
 
 _log = logging.getLogger(__name__)
 _adapter: MLflowAdapter | None = None
+_local = threading.local()
 
 
 def _get_adapter() -> MLflowAdapter:
@@ -19,6 +21,12 @@ def _get_adapter() -> MLflowAdapter:
         _adapter = MLflowAdapter(get_config())
         _adapter.initialise()
     return _adapter
+
+
+def _stack() -> list[Any]:
+    if not hasattr(_local, "spans"):
+        _local.spans = []
+    return _local.spans
 
 
 class trace_agent(ContextDecorator):  # noqa: N801 (intentional lowercase API surface)
@@ -39,31 +47,54 @@ class trace_agent(ContextDecorator):  # noqa: N801 (intentional lowercase API su
         self._span = None
         self._client = None
         self._trace_handle = None
+        self._is_root = False
 
     def __enter__(self) -> trace_agent:
         cfg = get_config()
         if cfg.disable_tracing:
             return self
+
         try:
-            from mlflow import MlflowClient  # noqa: TID253 — done lazily; could also be in adapter
+            from mlflow import MlflowClient  # noqa: TID253
 
             self._client = MlflowClient()
-            self._trace_handle = self._client.start_trace(name=self.name, inputs=self.attrs or None)
-        except Exception as e:  # noqa: BLE001 — fail-soft for runtime errors
+            stack = _stack()
+            if not stack:
+                handle = self._client.start_trace(name=self.name, inputs=self.attrs or None)
+                self._trace_handle = handle
+                self._is_root = True
+                stack.append({"trace_id": handle.trace_id, "span_id": handle.span_id})
+            else:
+                parent = stack[-1]
+                span = self._client.start_span(
+                    name=self.name,
+                    trace_id=parent["trace_id"],
+                    parent_id=parent["span_id"],
+                    inputs=self.attrs or None,
+                )
+                self._span = span
+                self._is_root = False
+                stack.append({"trace_id": parent["trace_id"], "span_id": span.span_id})
+        except Exception as e:  # noqa: BLE001
             _log.warning("llmops trace_agent('%s') start failed: %r", self.name, e)
-            self._trace_handle = None
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if self._trace_handle is None or self._client is None:
+        cfg = get_config()
+        if cfg.disable_tracing or self._client is None:
             return
         try:
+            stack = _stack()
+            if stack:
+                stack.pop()
             status = "ERROR" if exc_type else "OK"
-            self._client.end_trace(
-                trace_id=self._trace_handle.trace_id,
-                outputs=None,
-                status=status,
-            )
+            if self._is_root and self._trace_handle is not None:
+                self._client.end_trace(trace_id=self._trace_handle.trace_id, status=status)
+            elif self._span is not None:
+                self._client.end_span(
+                    trace_id=self._span.trace_id,
+                    span_id=self._span.span_id,
+                    status=status,
+                )
         except Exception as e:  # noqa: BLE001
             _log.warning("llmops trace_agent('%s') end failed: %r", self.name, e)
-        # Returning None / False ensures original exception (if any) propagates

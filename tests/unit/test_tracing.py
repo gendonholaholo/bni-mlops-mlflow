@@ -105,3 +105,20 @@ def test_trace_agent_runtime_error_does_not_crash_caller(
     with trace_agent("agent_x"):
         result = 42
     assert result == 42
+
+
+def test_nested_trace_agent_creates_child_span(
+    fake_mlflow_for_tracing: dict[str, MagicMock],
+) -> None:
+    from llmops.tracing import trace_agent
+
+    with trace_agent("orchestrator"):  # noqa: SIM117
+        with trace_agent("agent_tujuan"):
+            pass
+
+    client = fake_mlflow_for_tracing["client"]
+    # Outer = start_trace; inner = start_span with parent_id linkage
+    assert client.start_trace.call_count == 1
+    assert client.start_span.call_count == 1
+    inner_call = client.start_span.call_args
+    assert "parent_id" in inner_call.kwargs or len(inner_call.args) >= 3
