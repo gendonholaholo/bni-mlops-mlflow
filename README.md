@@ -5,7 +5,7 @@ LLM tracing + prompt registry SDK on top of MLflow. Drop-in for any Python agent
 ## Install
 
 ```bash
-uv add "git+ssh://git@github.com/gendonholaholo/bni-mlops-simulation.git@v0.1.0#subdirectory=ml-ops-test"
+uv add "git+ssh://git@github.com/gendonholaholo/bni-mlops-mlflow.git@v0.1.0"
 export MLFLOW_TRACKING_URI=http://localhost:5001
 ```
 
@@ -47,8 +47,8 @@ Trace appears at `$MLFLOW_TRACKING_URI` within seconds.
 If no MLflow server is running yet:
 
 ```bash
-git clone git@github.com:gendonholaholo/bni-mlops-simulation.git
-cd bni-mlops-simulation/ml-ops-test
+git clone git@github.com:gendonholaholo/bni-mlops-mlflow.git
+cd bni-mlops-mlflow
 cp .env.example .env
 docker compose up -d --wait
 ```
