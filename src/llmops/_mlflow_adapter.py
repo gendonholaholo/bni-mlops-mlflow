@@ -78,6 +78,33 @@ class MLflowAdapter:
         for k, v in tags.items():
             client.set_prompt_version_tag(name, version, k, str(v))
 
+    def search_prompts(self) -> list[Any]:
+        """Return registered prompts with their aliases populated.
+
+        MLflow's Prompt entity does not expose aliases directly (only name, description,
+        creation_timestamp, tags). To populate aliases for the v1 list-prompts CLI we
+        probe each prompt for a fixed set of known alias names (staging, production)
+        and aggregate them into a SimpleNamespace with `.name` and `.aliases: dict[str, int]`.
+
+        v2 work: surface aliases via a dedicated MLflow API if/when one ships.
+        """
+        from types import SimpleNamespace
+
+        from mlflow import MlflowClient  # noqa: TID253 — adapter is the only allowed importer
+
+        client = MlflowClient()
+        result: list[Any] = []
+        for p in client.search_prompts():
+            aliases: dict[str, int] = {}
+            for alias_name in ("staging", "production"):
+                try:
+                    pv = client.get_prompt_version_by_alias(p.name, alias_name)
+                    aliases[alias_name] = int(pv.version)
+                except Exception:  # noqa: BLE001 — missing alias is expected
+                    continue
+            result.append(SimpleNamespace(name=p.name, aliases=aliases))
+        return result
+
     # --- tracing primitives (used by tracing.py) ---
 
     def set_run_tag(self, key: str, value: str) -> None:

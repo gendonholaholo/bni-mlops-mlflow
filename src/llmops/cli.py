@@ -131,3 +131,24 @@ def promote(
     src = _load(f"{prompt_name}@{from_alias}")
     _set(prompt_name, alias=to_alias, version=src.version, from_alias=from_alias)
     typer.echo(f"[ok]   {prompt_name}: {from_alias}@v{src.version} -> {to_alias}@v{src.version}")
+
+
+@app.command(name="list-prompts")
+def list_prompts() -> None:
+    """Print a table of registered prompts and their aliases."""
+    from llmops._config import get_config
+    from llmops._mlflow_adapter import MLflowAdapter
+
+    adapter = MLflowAdapter(get_config())
+    prompts_ = adapter.search_prompts()
+
+    if not prompts_:
+        typer.echo("(no prompts registered)")
+        raise typer.Exit(code=0)
+
+    typer.echo(f"{'NAME':<32} {'ALIASES':<60}")
+    typer.echo("-" * 92)
+    for p in prompts_:
+        aliases = getattr(p, "aliases", {}) or {}
+        alias_str = ", ".join(f"{a}=v{v}" for a, v in sorted(aliases.items()))
+        typer.echo(f"{p.name:<32} {alias_str:<60}")
