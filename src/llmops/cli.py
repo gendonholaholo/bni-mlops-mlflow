@@ -116,3 +116,18 @@ def register_prompts(
 
     if failed:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def promote(
+    prompt_name: str = typer.Argument(..., help="Prompt name."),
+    from_alias: str = typer.Argument(..., help="Source alias (e.g., 'staging')."),
+    to_alias: str = typer.Argument(..., help="Target alias (e.g., 'production')."),
+) -> None:
+    """Move TO_ALIAS to the version currently pointed to by FROM_ALIAS."""
+    from llmops.prompts import load_prompt as _load
+    from llmops.prompts import set_alias as _set
+
+    src = _load(f"{prompt_name}@{from_alias}")
+    _set(prompt_name, alias=to_alias, version=src.version, from_alias=from_alias)
+    typer.echo(f"[ok]   {prompt_name}: {from_alias}@v{src.version} -> {to_alias}@v{src.version}")
