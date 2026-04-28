@@ -432,7 +432,7 @@ No spec rewrite needed — all v2 additions are additive on this design.
 
 ```
 bni-llmops/
-├── pyproject.toml              # Python 3.14, mlflow>=3.1<4, ruff target py314
+├── pyproject.toml              # Python 3.14, mlflow>=3.11,<4, ruff target py314
 ├── uv.lock
 ├── .python-version             # 3.14.4
 ├── .env.example
