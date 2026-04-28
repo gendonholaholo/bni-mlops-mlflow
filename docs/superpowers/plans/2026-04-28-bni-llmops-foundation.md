@@ -986,9 +986,11 @@ git commit -m "feat(sdk): add MLflowAdapter as sole mlflow coupling point + test
 - Create: `src/llmops/tracing.py`
 - Create: `tests/unit/test_tracing.py`
 
+> **Implementation note (post-execution correction, 2026-04-28):** The original plan used `request_id=` kwarg in `start_span` / `end_span` / `end_trace` calls. Validation against installed mlflow 3.11.1 found the actual kwarg is `trace_id=` (the `Span` entity exposes both `.trace_id` and `.request_id` as legacy aliases for attribute access, but the method parameters require `trace_id=`). All Phase 4 yaml/code below has been updated to use `trace_id` consistently — kwargs and attribute access — for self-consistency.
+
 - [ ] **Step 1: Validate API**
 
-Fetch `mlflow.client.MlflowClient.start_trace` / `start_span` / `end_span` / `end_trace` signatures from mlflow source for v3.11.x. Confirm parent-child linking via `parent_id`.
+Fetch `mlflow.client.MlflowClient.start_trace` / `start_span` / `end_span` / `end_trace` signatures from mlflow source for v3.11.x. Confirm parent-child linking via `parent_id`. Confirm methods take `trace_id=` (NOT `request_id=`).
 
 - [ ] **Step 2: Write context-manager tests**
 
@@ -1011,7 +1013,7 @@ def fake_mlflow_for_tracing(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicM
     span_mock.span_id = "s1"
     client_mock = MagicMock()
     client_mock.start_trace = MagicMock(
-        return_value=types.SimpleNamespace(request_id="r1", span_id="s1")
+        return_value=types.SimpleNamespace(trace_id="r1", span_id="s1")
     )
     client_mock.start_span = MagicMock(return_value=span_mock)
     client_mock.end_span = MagicMock()
@@ -1176,7 +1178,7 @@ class trace_agent(ContextDecorator):  # noqa: N801 (intentional lowercase API su
         try:
             status = "ERROR" if exc_type else "OK"
             self._client.end_trace(
-                request_id=self._trace_handle.request_id,
+                trace_id=self._trace_handle.trace_id,
                 outputs=None,
                 status=status,
             )
@@ -1261,18 +1263,18 @@ def _stack() -> list[Any]:
                 handle = self._client.start_trace(name=self.name, inputs=self.attrs or None)
                 self._trace_handle = handle
                 self._is_root = True
-                stack.append({"request_id": handle.request_id, "span_id": handle.span_id})
+                stack.append({"trace_id": handle.trace_id, "span_id": handle.span_id})
             else:
                 parent = stack[-1]
                 span = self._client.start_span(
                     name=self.name,
-                    request_id=parent["request_id"],
+                    trace_id=parent["trace_id"],
                     parent_id=parent["span_id"],
                     inputs=self.attrs or None,
                 )
                 self._span = span
                 self._is_root = False
-                stack.append({"request_id": parent["request_id"], "span_id": span.span_id})
+                stack.append({"trace_id": parent["trace_id"], "span_id": span.span_id})
         except Exception as e:  # noqa: BLE001
             _log.warning("llmops trace_agent('%s') start failed: %r", self.name, e)
         return self
@@ -1288,11 +1290,11 @@ def _stack() -> list[Any]:
             status = "ERROR" if exc_type else "OK"
             if self._is_root and self._trace_handle is not None:
                 self._client.end_trace(
-                    request_id=self._trace_handle.request_id, status=status
+                    trace_id=self._trace_handle.trace_id, status=status
                 )
             elif self._span is not None:
                 self._client.end_span(
-                    request_id=self._span.request_id,
+                    trace_id=self._span.trace_id,
                     span_id=self._span.span_id,
                     status=status,
                 )
