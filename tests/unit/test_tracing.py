@@ -122,3 +122,19 @@ def test_nested_trace_agent_creates_child_span(
     assert client.start_span.call_count == 1
     inner_call = client.start_span.call_args
     assert "parent_id" in inner_call.kwargs or len(inner_call.args) >= 3
+
+
+def test_trace_agent_propagates_user_exception(
+    fake_mlflow_for_tracing: dict[str, MagicMock],
+) -> None:
+    from llmops.tracing import trace_agent
+
+    with pytest.raises(ValueError, match="boom"):  # noqa: SIM117
+        with trace_agent("agent_x"):
+            raise ValueError("boom")
+
+    client = fake_mlflow_for_tracing["client"]
+    # The end-of-trace call carried status=ERROR
+    assert client.end_trace.called
+    args, kwargs = client.end_trace.call_args
+    assert kwargs.get("status") == "ERROR"
