@@ -67,23 +67,31 @@ def _current_span() -> Any | None:
 def set_trace_tags(**tags: Any) -> None:
     """Attach mutable user-defined tags to the active trace.
 
-    Writes to ``TraceInfo.tags`` via ``mlflow.update_current_trace(tags=...)``
+    Writes to ``TraceInfo.tags`` via ``MlflowClient.set_trace_tag(trace_id, ...)``
     so the values land in the MLflow trace overview and are queryable via
     ``mlflow.search_traces(filter_string='tags."env" = \\'dev\\'')`` (quote
     keys that contain dots).
 
-    Values are coerced to ``str`` to satisfy MLflow's ``dict[str, str]`` tag
-    contract. Outside an active trace, MLflow logs a warning and the call is
-    a no-op (never raises). Disabled when ``LLMOPS_DISABLE_TRACING=true``.
+    Must be called inside an active ``trace_agent`` context. Outside one, the
+    call is a warning + no-op (never raises). Disabled when
+    ``LLMOPS_DISABLE_TRACING=true``. Values are coerced to ``str`` to satisfy
+    MLflow's ``dict[str, str]`` tag contract.
     """
     if not tags or get_config().disable_tracing:
         return
+    stack = _stack()
+    if not stack:
+        _log.warning("llmops.set_trace_tags called outside trace_agent — ignored")
+        return
+    trace_id = stack[0].trace_id
     try:
-        import mlflow  # noqa: TID253, PLC0415
+        from mlflow import MlflowClient  # noqa: TID253, PLC0415
 
-        mlflow.update_current_trace(tags={k: str(v) for k, v in tags.items()})
+        client = MlflowClient()
+        for k, v in tags.items():
+            client.set_trace_tag(trace_id, k, str(v))
     except Exception as e:  # noqa: BLE001
-        _log.warning("llmops.set_trace_tags update_current_trace failed: %r", e)
+        _log.warning("llmops.set_trace_tags set_trace_tag failed: %r", e)
 
 
 def set_trace_metadata(
@@ -92,13 +100,16 @@ def set_trace_metadata(
     """Attach canonical session/user identifiers to the active trace.
 
     Writes to ``TraceInfo.request_metadata`` under MLflow's reserved keys
-    ``mlflow.trace.session`` and ``mlflow.trace.user`` via
-    ``mlflow.update_current_trace(metadata=...)``. The MLflow UI's Sessions
-    tab and ``mlflow.search_traces(filter_string='metadata."mlflow.trace.session"
+    ``mlflow.trace.session`` and ``mlflow.trace.user`` via the in-memory trace
+    manager (the same path ``mlflow.update_current_trace`` uses internally —
+    we bypass the fluent active-span check because ``trace_agent`` builds
+    traces with the low-level ``MlflowClient.start_trace`` API, which does
+    not register a fluent active span). The MLflow UI's Sessions tab and
+    ``mlflow.search_traces(filter_string='metadata."mlflow.trace.session"
     = ...')`` consume these keys for grouping and filtering.
 
-    Note: trace metadata is **immutable once the trace is logged** — set
-    session/user IDs once at trace start, don't try to mutate mid-trace.
+    Must be called inside an active ``trace_agent`` context, before the root
+    trace ends — metadata is **immutable once the trace is logged**.
     """
     meta: dict[str, str] = {}
     if session_id is not None:
@@ -107,12 +118,19 @@ def set_trace_metadata(
         meta["mlflow.trace.user"] = user_id
     if not meta or get_config().disable_tracing:
         return
+    stack = _stack()
+    if not stack:
+        _log.warning("llmops.set_trace_metadata called outside trace_agent — ignored")
+        return
+    trace_id = stack[0].trace_id
     try:
-        import mlflow  # noqa: TID253, PLC0415
+        from mlflow.tracing.trace_manager import InMemoryTraceManager  # noqa: TID253, PLC0415
 
-        mlflow.update_current_trace(metadata=meta)
+        mgr = InMemoryTraceManager.get_instance()
+        for k, v in meta.items():
+            mgr.set_trace_metadata(trace_id, k, str(v))
     except Exception as e:  # noqa: BLE001
-        _log.warning("llmops.set_trace_metadata update_current_trace failed: %r", e)
+        _log.warning("llmops.set_trace_metadata failed: %r", e)
 
 
 def log_hyperparams(**hyperparams: Any) -> None:
