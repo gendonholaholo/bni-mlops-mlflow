@@ -149,7 +149,19 @@ src/llmops/
 └── exceptions.py          # LLMOpsError hierarchy
 ```
 
-**Coupling enforcement (CI):** ruff `flake8-tidy-imports` rule banning `mlflow` imports outside `_mlflow_adapter.py`.
+**Coupling enforcement (CI):** ruff `flake8-tidy-imports` rule **TID253** (`banned-module-level-imports`) forbids `mlflow` imports anywhere in `src/llmops/` except `_mlflow_adapter.py`. Configuration in `pyproject.toml`:
+
+```toml
+[tool.ruff.lint.flake8-tidy-imports]
+banned-module-level-imports = ["mlflow"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/llmops/_mlflow_adapter.py" = ["TID253"]
+```
+
+`ruff check` enforces this on every PR; a violation is a CI hard fail (no override).
+
+**MLflow API namespace note (validated against latest docs):** MLflow's prompt registry has slight namespace asymmetry — `mlflow.genai.register_prompt`, `mlflow.genai.load_prompt`, but `mlflow.set_prompt_alias` (no `genai` namespace). The adapter abstracts this; SDK callers see only `llmops.register_prompt` / `llmops.load_prompt` / `llmops.set_alias`.
 
 ### 4.2 MLflow Tracking Stack (Docker Compose)
 
@@ -157,8 +169,8 @@ src/llmops/
 
 | Service | Image | Purpose |
 |---|---|---|
-| `mlflow` | `ghcr.io/mlflow/mlflow:v3.1.4` (pinned) | Tracking server, UI, prompt registry, artifact proxy |
-| `postgres` | `postgres:16-alpine` (pinned major) | Backend store for runs, experiments, prompts, registered models |
+| `mlflow` | `ghcr.io/mlflow/mlflow:v3.11.1` (pinned) | Tracking server, UI, prompt registry, artifact proxy |
+| `postgres` | `postgres:18-alpine` (pinned major) | Backend store for runs, experiments, prompts, registered models |
 
 **Volumes (named, persistent across `docker compose down/up`):**
 - `llmops_pgdata` → postgres `/var/lib/postgresql/data`
@@ -212,7 +224,7 @@ mlflow server \
 
 **Single audit-tag writer:** the `promote.yml` workflow does NOT contain its own MLflow client logic. It runs `uv run llmops promote <name> <from> <to>`, which calls `prompts.set_alias()` which writes the audit tags (Section 5.3). The CLI command and the workflow are NOT two parallel implementations — they share `src/llmops/cli.py` → `prompts.set_alias()`. This eliminates risk of audit-tag drift.
 
-**Runner setup:** uses `astral-sh/setup-uv@v3` + `actions/setup-python@v5` with `python-version: "3.14.4"`. `uv` caches via `actions/cache`.
+**Runner setup:** uses `astral-sh/setup-uv@v8` + `actions/setup-python@v6` with `python-version: "3.14.4"`. `setup-uv` provides `enable-cache: true` for built-in dependency caching (no separate `actions/cache` step needed).
 
 **Secrets needed:**
 - `MLFLOW_TRACKING_URI` — internal MLflow URL accessible from CI runner.
@@ -282,9 +294,9 @@ Run via `uv run llmops <command>`.
 |---|---|---|
 | Python version (SDK + dev) | `3.14.4` (`requires-python = ">=3.14,<3.15"`) | Matches colleague's project version |
 | Ruff `target-version` | `"py314"` | Match Python version |
-| MLflow client lib | `mlflow >= 3.1, < 4` | Pin major version to avoid breaking changes |
-| MLflow server image | `ghcr.io/mlflow/mlflow:v3.1.4` (pinned patch) | Reproducibility; upgrade is an explicit PR |
-| Postgres image | `postgres:16-alpine` | Stable, small, well-supported |
+| MLflow client lib | `mlflow >= 3.11, < 4` | Latest stable; pin major to avoid breaking changes |
+| MLflow server image | `ghcr.io/mlflow/mlflow:v3.11.1` (pinned patch) | Matches client major; upgrade is an explicit PR |
+| Postgres image | `postgres:18-alpine` | Latest stable major (Postgres 18) |
 | Package manager | `uv` | Per project standard |
 | Lint + format | `ruff check` + `ruff format` | Per project standard |
 | CI platform | GitHub Actions | Per locked decision |
@@ -395,7 +407,7 @@ Three workflows per Section 4.4 with all triggers wired to `gos-dev`.
 
 | Risk | Mitigation |
 |---|---|
-| MLflow 3.1.4 lacks an explicit Python 3.14 wheel; transitive deps may also lag | DoD step `uv sync --python 3.14.4` MUST pass before merge. If a dep lacks a 3.14 wheel, evaluate (a) bumping that dep, (b) bumping MLflow to a newer minor that lists 3.14 in classifiers, (c) temporary fallback to `requires-python = ">=3.13,<3.15"` (rekan can still use 3.14). |
+| MLflow 3.11.1 declares `requires_python = ">=3.10"` (no upper bound) but classifier list only mentions Python 3.10 — Python 3.14 is not explicitly tagged. Transitive deps may also lag on cp314 wheels | DoD step `uv sync --python 3.14.4` MUST pass before merge. If a dep lacks a 3.14 wheel, evaluate: (a) bump the dep to a newer release with cp314 wheels, (b) bump MLflow to a newer minor that lists 3.14 explicitly in classifiers, (c) temporary fallback to `requires-python = ">=3.13,<3.15"` (rekan can still run on 3.14). |
 | MLflow client/server protocol drift | Server image and client lib pinned to same major (`3.x`). Upgrade in lockstep via PR. |
 | Prompt YAML schema evolves | Schema version field reserved (`schema_version: 1`); future migrations explicit. |
 | `--serve-artifacts` proxy bandwidth bottleneck | Acceptable for single-team v1; documented out-of-scope. Trigger to MinIO is artifact volume >50 GB or team >5 users. |
@@ -428,7 +440,7 @@ bni-llmops/
 ├── docker-compose.yml          # mlflow + postgres
 ├── docker/
 │   └── mlflow/
-│       └── Dockerfile          # FROM ghcr.io/mlflow/mlflow:v3.1.4 (custom psycopg deps if needed)
+│       └── Dockerfile          # FROM ghcr.io/mlflow/mlflow:v3.11.1 (custom psycopg deps if needed)
 ├── src/
 │   └── llmops/
 │       ├── __init__.py         # public API surface (re-exports)
@@ -529,7 +541,7 @@ Validation runs:
 
 This design adheres to user-locked principles:
 
-- [x] **Validate against latest official docs** — all MLflow APIs verified against v3.1.4 docs before locking
+- [x] **Validate against latest official docs** — all tech stack validated against primary sources (PyPI, ghcr.io, hub.docker.com, github.com/<org>/releases, official docs sites). Context7 was found stale on MLflow latest version (showed v3.1.4 when actual latest is v3.11.1) and on `setup-uv` / `setup-python` action versions; primary sources used as authoritative
 - [x] **Decisions binding upfront** — every option explicitly IN or OUT (Section 2.2 + 6 + 9)
 - [x] **Tool boundaries clear** — SDK = act, MLflow UI = observe, no overlap
 - [x] **MLflow aliases not stages** — all promotion uses `set_prompt_alias`
