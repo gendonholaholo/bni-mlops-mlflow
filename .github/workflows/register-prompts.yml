@@ -1,0 +1,29 @@
+# .github/workflows/register-prompts.yml
+name: register-prompts
+
+on:
+  push:
+    branches: [gos-dev]
+    paths:
+      - 'prompts/**'
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          python-version: "3.14.4"
+          enable-cache: true
+
+      - name: Sync
+        run: uv sync --python 3.14.4
+
+      - name: Register prompts (also sets staging alias by default)
+        run: uv run llmops register-prompts prompts/
