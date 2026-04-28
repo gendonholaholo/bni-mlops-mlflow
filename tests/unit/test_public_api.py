@@ -10,6 +10,12 @@ def test_public_api_surface() -> None:
     assert callable(llmops.load_prompt)
     assert callable(llmops.register_prompt)
     assert callable(llmops.set_alias)
+    assert callable(llmops.log_hyperparams)
+    assert callable(llmops.set_trace_tags)
+    assert callable(llmops.set_trace_metadata)
+    assert callable(llmops.autolog)
+    assert hasattr(llmops, "SpanType")
+    assert llmops.SpanType.AGENT == "AGENT"
     assert hasattr(llmops, "LLMOpsError")
     assert hasattr(llmops, "LLMOpsConfigError")
     assert hasattr(llmops, "LLMOpsPromptNotFoundError")

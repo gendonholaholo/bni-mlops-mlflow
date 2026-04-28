@@ -18,6 +18,9 @@ class _PromptObj(Protocol):
     name: str
     version: int
     template: str
+    # NOTE: PromptVersion also exposes ``.model_config`` (MLflow 3.8+) when the
+    # prompt was registered with one. We don't declare it on the Protocol because
+    # not every consumer / mock path supplies it; callers use getattr fallback.
 
     def format(self, **vars: Any) -> str: ...  # noqa: A002
 
@@ -45,12 +48,16 @@ class MLflowAdapter:
         template: str,
         commit_message: str | None = None,
         tags: dict[str, str] | None = None,
+        model_config: dict[str, Any] | None = None,
     ) -> _PromptObj:
+        # ``model_config`` is the canonical MLflow 3.8+ field for versioning
+        # generation hyperparameters alongside the prompt template (Issue #2).
         return mlflow.genai.register_prompt(
             name=name,
             template=template,
             commit_message=commit_message,
             tags=tags,
+            model_config=model_config,
         )
 
     def load_prompt(

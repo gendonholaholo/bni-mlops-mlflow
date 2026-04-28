@@ -99,12 +99,59 @@ def test_register_prompt_creates_new_when_template_changes(
     from llmops.prompts import register_prompt
 
     genai = fake_mlflow_for_prompts["genai"]
-    genai.load_prompt.return_value = types.SimpleNamespace(name="p", version=1, template="old")
+    genai.load_prompt.return_value = types.SimpleNamespace(
+        name="p", version=1, template="old", model_config=None
+    )
     genai.register_prompt.return_value = types.SimpleNamespace(name="p", version=2)
 
     p = register_prompt(name="p", template="new", commit_message="update")
     assert p.version == 2
     assert genai.register_prompt.called
+
+
+def test_register_prompt_creates_new_when_model_config_changes(
+    fake_mlflow_for_prompts: dict[str, MagicMock],
+) -> None:
+    """Issue #2: idempotence considers model_config — same template but
+    different generation hyperparameters MUST create a new prompt version."""
+    from llmops.prompts import register_prompt
+
+    genai = fake_mlflow_for_prompts["genai"]
+    # Existing version: template "t" with temperature=0.7
+    genai.load_prompt.return_value = types.SimpleNamespace(
+        name="p", version=1, template="t", model_config={"temperature": 0.7}
+    )
+    genai.register_prompt.return_value = types.SimpleNamespace(name="p", version=2)
+
+    p = register_prompt(
+        name="p",
+        template="t",  # same template
+        commit_message="tune",
+        model_config={"temperature": 0.3},  # different hyperparams
+    )
+    assert p.version == 2
+    genai.register_prompt.assert_called_once()
+    assert genai.register_prompt.call_args.kwargs["model_config"] == {"temperature": 0.3}
+
+
+def test_register_prompt_idempotent_when_template_and_model_config_match(
+    fake_mlflow_for_prompts: dict[str, MagicMock],
+) -> None:
+    """Same template AND same model_config → idempotent (no new version)."""
+    from llmops.prompts import register_prompt
+
+    genai = fake_mlflow_for_prompts["genai"]
+    genai.load_prompt.return_value = types.SimpleNamespace(
+        name="p", version=4, template="t", model_config={"temperature": 0.7, "top_k": 40}
+    )
+
+    p = register_prompt(
+        name="p",
+        template="t",
+        model_config={"temperature": 0.7, "top_k": 40},
+    )
+    assert p.version == 4
+    assert genai.register_prompt.call_count == 0
 
 
 def test_prompt_versions_tag_written_on_outer_trace_exit(

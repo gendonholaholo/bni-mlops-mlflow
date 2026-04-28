@@ -56,7 +56,7 @@ def test_adapter_register_prompt_calls_genai(fake_mlflow: MagicMock) -> None:
     a.register_prompt(name="p", template="t", commit_message="c", tags={"k": "v"})
 
     fake_mlflow.genai.register_prompt.assert_called_once_with(
-        name="p", template="t", commit_message="c", tags={"k": "v"}
+        name="p", template="t", commit_message="c", tags={"k": "v"}, model_config=None
     )
 
 
@@ -69,6 +69,30 @@ def test_adapter_load_prompt_uri_form(fake_mlflow: MagicMock) -> None:
 
     fake_mlflow.genai.load_prompt.assert_called_once_with(
         name_or_uri="prompts:/agent_tujuan@production"
+    )
+
+
+def test_adapter_register_prompt_with_model_config(fake_mlflow: MagicMock) -> None:
+    """Issue #2: adapter forwards model_config kwarg to mlflow.genai.register_prompt
+    so generation hyperparameters are versioned with the prompt template."""
+    from llmops._mlflow_adapter import MLflowAdapter
+
+    cfg = Config(tracking_uri="http://x", experiment_name="e", disable_tracing=False)
+    a = MLflowAdapter(cfg)
+    a.register_prompt(
+        name="p",
+        template="t",
+        commit_message="c",
+        tags={"k": "v"},
+        model_config={"temperature": 0.7, "top_k": 40, "num_ctx": 4096},
+    )
+
+    fake_mlflow.genai.register_prompt.assert_called_once_with(
+        name="p",
+        template="t",
+        commit_message="c",
+        tags={"k": "v"},
+        model_config={"temperature": 0.7, "top_k": 40, "num_ctx": 4096},
     )
 
 

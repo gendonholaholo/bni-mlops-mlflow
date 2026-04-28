@@ -106,6 +106,7 @@ def register_prompts(
                 template=schema.template,
                 commit_message=os.environ.get("GITHUB_SHA", ""),
                 tags=schema.tags,
+                model_config=schema.mlflow_model_config,
             )
             if set_staging:
                 _set_alias(schema.name, alias="staging", version=result.version)
