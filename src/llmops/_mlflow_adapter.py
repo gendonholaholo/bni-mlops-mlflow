@@ -68,6 +68,16 @@ class MLflowAdapter:
         # NOTE: this lives on mlflow.* (root namespace), NOT mlflow.genai.*
         mlflow.set_prompt_alias(name, alias, version)
 
+    def write_prompt_version_tags(self, name: str, version: int, tags: dict[str, str]) -> None:
+        """Write each (key, value) in `tags` as a tag on the given prompt version
+        via MlflowClient.set_prompt_version_tag (verified API surface in mlflow 3.11.x).
+        """
+        from mlflow import MlflowClient  # noqa: TID253 — adapter is the only allowed importer
+
+        client = MlflowClient()
+        for k, v in tags.items():
+            client.set_prompt_version_tag(name, version, k, str(v))
+
     # --- tracing primitives (used by tracing.py) ---
 
     def set_run_tag(self, key: str, value: str) -> None:

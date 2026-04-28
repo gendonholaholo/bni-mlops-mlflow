@@ -5,7 +5,10 @@ All public functions go through MLflowAdapter — never `import mlflow` here.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from llmops._config import get_config
@@ -81,3 +84,38 @@ def register_prompt(
     return adapter.register_prompt(
         name=name, template=template, commit_message=commit_message, tags=tags
     )
+
+
+def set_alias(
+    name: str,
+    alias: str,
+    version: int,
+    from_alias: str | None = None,
+) -> None:
+    """Move `alias` to `version`, recording audit tags on the prompt version.
+
+    Audit tags written:
+      - promoted_to_alias  (= alias)
+      - promoted_at        (ISO 8601 UTC)
+      - promoted_from_alias  (if from_alias provided)
+      - promoted_by          (env GITHUB_ACTOR if set)
+      - promoted_git_sha     (env GITHUB_SHA if set)
+
+    Tag writes are best-effort: if tagging fails, the alias change still stands.
+    """
+    adapter = _get_adapter()
+    adapter.set_alias(name=name, alias=alias, version=version)
+
+    tags: dict[str, str] = {
+        "promoted_to_alias": alias,
+        "promoted_at": datetime.now(UTC).isoformat(),
+    }
+    if from_alias:
+        tags["promoted_from_alias"] = from_alias
+    if actor := os.environ.get("GITHUB_ACTOR"):
+        tags["promoted_by"] = actor
+    if sha := os.environ.get("GITHUB_SHA"):
+        tags["promoted_git_sha"] = sha
+
+    with contextlib.suppress(Exception):  # best-effort: don't break alias change if tagging fails
+        adapter.write_prompt_version_tags(name=name, version=version, tags=tags)

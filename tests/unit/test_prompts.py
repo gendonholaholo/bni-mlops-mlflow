@@ -105,3 +105,52 @@ def test_register_prompt_creates_new_when_template_changes(
     p = register_prompt(name="p", template="new", commit_message="update")
     assert p.version == 2
     assert genai.register_prompt.called
+
+
+def test_set_alias_writes_audit_tags(
+    fake_mlflow_for_prompts: dict[str, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """set_alias updates the alias pointer AND writes audit tags via
+    MlflowClient.set_prompt_version_tag for each audit key."""
+    monkeypatch.setenv("GITHUB_ACTOR", "alice")
+    monkeypatch.setenv("GITHUB_SHA", "deadbeef")
+
+    # Reroute MlflowClient() to a fixed mock so we can verify tag writes
+    client_mock = MagicMock()
+    fake_mlflow_for_prompts["mlflow"].MlflowClient = MagicMock(return_value=client_mock)
+
+    from llmops.prompts import set_alias
+
+    set_alias("agent_tujuan", alias="production", version=3, from_alias="staging")
+
+    # The alias pointer was moved on the root mlflow namespace
+    fake_mlflow_for_prompts["mlflow"].set_prompt_alias.assert_called_once_with(
+        "agent_tujuan", "production", 3
+    )
+
+    # Audit tags were written one-per-key via set_prompt_version_tag(name, version, key, value)
+    tag_calls = client_mock.set_prompt_version_tag.call_args_list
+    assert len(tag_calls) >= 4, (
+        f"expected at least 4 tag writes, got {len(tag_calls)}: {tag_calls!r}"
+    )
+
+    written: dict[str, str] = {}
+    for call in tag_calls:
+        # Accept positional or kwarg form
+        if len(call.args) == 4:
+            name, version, key, value = call.args
+        else:
+            name = call.kwargs.get("name", call.args[0] if call.args else None)
+            version = call.kwargs.get("version", call.args[1] if len(call.args) > 1 else None)
+            key = call.kwargs.get("key", call.args[2] if len(call.args) > 2 else None)
+            value = call.kwargs.get("value", call.args[3] if len(call.args) > 3 else None)
+        assert name == "agent_tujuan"
+        assert version == 3
+        written[key] = value
+
+    assert written.get("promoted_to_alias") == "production"
+    assert written.get("promoted_from_alias") == "staging"
+    assert "promoted_at" in written and written["promoted_at"]  # ISO timestamp non-empty
+    assert written.get("promoted_by") == "alice"
+    assert written.get("promoted_git_sha") == "deadbeef"
