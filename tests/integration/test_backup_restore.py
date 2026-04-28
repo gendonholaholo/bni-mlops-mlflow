@@ -32,7 +32,8 @@ def test_backup_restore_round_trip(tmp_path: Path) -> None:
                 "-d",
                 "llmops",
                 "-c",
-                "CREATE TABLE backup_marker (note text);"
+                "DROP TABLE IF EXISTS backup_marker;"
+                " CREATE TABLE backup_marker (note text);"
                 " INSERT INTO backup_marker VALUES ('round-trip');",
             ],
             cwd=REPO,

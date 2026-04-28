@@ -83,9 +83,9 @@ def register_prompts(
     set the `staging` alias to the resulting version for each prompt — this is
     the locked CI behavior for `register-prompts.yml` on merge to gos-dev."""
     # Lazy imports — keep CLI startup fast and avoid pulling SDK deps unless needed
+    from llmops._prompt_schema import PromptYAML
     from llmops.prompts import register_prompt as _reg
     from llmops.prompts import set_alias as _set_alias
-    from prompts._schema import PromptYAML
 
     paths = sorted(directory.glob("*.yaml"))
     if not paths:
