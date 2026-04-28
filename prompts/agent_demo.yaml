@@ -1,0 +1,17 @@
+# prompts/agent_demo.yaml
+schema_version: 1
+name: agent_demo
+description: |
+  Demo prompt used to verify the prompts-as-code → MLflow registration path.
+template: |
+  You are a demo agent. Given the user's question:
+
+    {{ question }}
+
+  Respond in {{ style }} style. Keep it under 100 words.
+variables:
+  - question
+  - style
+tags:
+  domain: demo
+  agent_type: standalone
