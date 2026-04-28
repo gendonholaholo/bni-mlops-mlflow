@@ -1,63 +1,60 @@
 # bni-llmops
 
-LLM Ops SDK for BNI — framework-agnostic tracing + prompt registry on top of MLflow.
+LLM tracing + prompt registry SDK on top of MLflow. Drop-in for any Python agentic codebase.
 
-## What it does
-
-- **Tracing**: every LLM call, agent step, orchestrator hand-off captured with input, output, latency, exceptions, and parent-child span structure. View in MLflow UI.
-- **Prompt registry**: prompts stored as YAML in Git → registered automatically to MLflow on merge → `staging`/`production` aliases for promotion.
-- **Standalone**: one `docker compose up` brings up MLflow + Postgres. SDK is `import llmops` and goes.
-
-## Quickstart (5 minutes)
+## Install
 
 ```bash
-# 1. Bring up the tracking stack
-git clone <this-repo>
-cd ml-ops-test
-cp .env.example .env
-docker compose up -d --wait
-
-# 2. From your project (separate terminal):
-uv add git+ssh://git@github.com/<org>/bni-llmops@v0.1.0
+uv add "git+ssh://git@github.com/gendonholaholo/bni-mlops-simulation.git@v0.1.0#subdirectory=ml-ops-test"
 export MLFLOW_TRACKING_URI=http://localhost:5001
 ```
 
+## Use
+
 ```python
-# 3. Use it:
 import llmops
 
 @llmops.trace_agent("agent_tujuan")
-def run_tujuan(pain_point: str) -> str:
-    prompt = llmops.load_prompt("agent_tujuan@production")
-    # ... call your LLM with prompt.format(...)
-    return "result"
+def run(question: str) -> str:
+    prompt = llmops.load_prompt("agent_demo@production")
+    return your_llm(prompt.format(question=question))
 
-run_tujuan("user can't find report X")
+run("user can't find report X")
 ```
 
-Open `http://localhost:5001` and you'll see the trace with span hierarchy.
+Trace appears at `$MLFLOW_TRACKING_URI` within seconds.
 
-## Recipes
+## API
 
-- `docs/recipes/openai.md` — OpenAI SDK
-- `docs/recipes/langchain.md` — LangChain (uses `mlflow.langchain.autolog()`)
-- `docs/recipes/custom.md` — bring your own orchestration
+| Symbol | Purpose |
+|---|---|
+| `@llmops.trace_agent(name)` / `with llmops.trace_agent(name):` | wrap a function or block in a span |
+| `llmops.load_prompt("name@alias")` | load by alias (or `"name/version"`) — returns object with `.template` and `.format(**vars)` |
+| `llmops.register_prompt(name, template, ...)` | register a new version (idempotent) |
+| `llmops.set_alias(name, alias, version, from_alias=...)` | move alias; writes audit tags |
+| `llmops.LLMOpsError` (and subclasses) | catch SDK-level errors |
 
-## Architecture
+## Environment
 
-See `docs/architecture.md` for the high-level diagram.
+| Var | Purpose |
+|---|---|
+| `MLFLOW_TRACKING_URI` | **required** — your MLflow server URL |
+| `LLMOPS_EXPERIMENT_NAME` | optional — default `bni-agentic-prd` |
+| `LLMOPS_DISABLE_TRACING` | optional — `true` makes every `trace_agent` a no-op |
 
-## Spec
+## Self-host the tracking stack
 
-Full design: `docs/superpowers/specs/2026-04-28-bni-llmops-design.md`.
+If no MLflow server is running yet:
 
-## Operations
+```bash
+git clone git@github.com:gendonholaholo/bni-mlops-simulation.git
+cd bni-mlops-simulation/ml-ops-test
+cp .env.example .env
+docker compose up -d --wait
+```
 
-- Backup: `bash scripts/backup.sh ./backups/$(date -u +%Y%m%dT%H%M%SZ)`
-- Restore: `bash scripts/restore.sh <backup-dir>`
-- Doctor: `uv run llmops doctor`
-- Logs: `docker compose logs -f mlflow`
+UI: <http://localhost:5001>.
 
-## License
+---
 
-Internal (BNI).
+More: `docs/recipes/{openai,langchain,custom}.md` · `docs/architecture.md` · `docs/troubleshooting.md`
