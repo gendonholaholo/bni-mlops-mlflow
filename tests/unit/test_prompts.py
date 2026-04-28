@@ -67,3 +67,41 @@ def test_load_prompt_missing_raises_typed_error(
 
     with pytest.raises(LLMOpsPromptNotFoundError):
         load_prompt("missing@production")
+
+
+def test_register_prompt_idempotent_when_template_unchanged(
+    fake_mlflow_for_prompts: dict[str, MagicMock],
+) -> None:
+    """If the latest version's template equals the new template, no new version is created."""
+    from llmops.prompts import register_prompt
+
+    genai = fake_mlflow_for_prompts["genai"]
+    # First call: no existing prompt → register creates v1
+    genai.load_prompt.side_effect = Exception("RESOURCE_DOES_NOT_EXIST")
+    genai.register_prompt.return_value = types.SimpleNamespace(name="p", version=1)
+    p1 = register_prompt(name="p", template="hello {{ x }}", commit_message="init")
+    assert p1.version == 1
+    assert genai.register_prompt.call_count == 1
+
+    # Second call with same template: load returns the existing one; no new register
+    genai.load_prompt.side_effect = None
+    genai.load_prompt.return_value = types.SimpleNamespace(
+        name="p", version=1, template="hello {{ x }}"
+    )
+    p2 = register_prompt(name="p", template="hello {{ x }}", commit_message="noop")
+    assert p2.version == 1
+    assert genai.register_prompt.call_count == 1  # NOT incremented
+
+
+def test_register_prompt_creates_new_when_template_changes(
+    fake_mlflow_for_prompts: dict[str, MagicMock],
+) -> None:
+    from llmops.prompts import register_prompt
+
+    genai = fake_mlflow_for_prompts["genai"]
+    genai.load_prompt.return_value = types.SimpleNamespace(name="p", version=1, template="old")
+    genai.register_prompt.return_value = types.SimpleNamespace(name="p", version=2)
+
+    p = register_prompt(name="p", template="new", commit_message="update")
+    assert p.version == 2
+    assert genai.register_prompt.called

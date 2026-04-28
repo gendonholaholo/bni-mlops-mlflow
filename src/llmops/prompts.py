@@ -52,3 +52,32 @@ def load_prompt(ref: str) -> Any:
         if "DOES_NOT_EXIST" in msg or "NOT_FOUND" in msg or "RESOURCE_DOES_NOT_EXIST" in msg:
             raise LLMOpsPromptNotFoundError(name, alias=alias, version=version) from e
         raise
+
+
+def register_prompt(
+    name: str,
+    template: str,
+    commit_message: str | None = None,
+    tags: dict[str, str] | None = None,
+) -> Any:
+    """Register a new prompt version. Idempotent (v1 strategy): if any of the
+    `staging` or `production` aliases points at a version whose template equals
+    the new template, return that version without creating a new one.
+
+    Note: a more thorough check (search ALL versions) is v2 work — the search API
+    surface needs validation against MLflow 3.11.x first.
+    """
+    adapter = _get_adapter()
+
+    existing = None
+    for try_alias in ("staging", "production"):
+        try:
+            existing = adapter.load_prompt(name=name, alias=try_alias)
+            if existing.template == template:
+                return existing
+        except Exception:  # noqa: BLE001
+            continue
+
+    return adapter.register_prompt(
+        name=name, template=template, commit_message=commit_message, tags=tags
+    )
