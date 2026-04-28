@@ -1,0 +1,39 @@
+# .github/workflows/promote.yml
+name: promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt_name:
+        description: "Prompt name (e.g., agent_tujuan)"
+        required: true
+      from_alias:
+        description: "Source alias"
+        required: true
+        default: "staging"
+      to_alias:
+        description: "Target alias"
+        required: true
+        default: "production"
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      GITHUB_ACTOR: ${{ github.actor }}
+      GITHUB_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v8
+        with:
+          python-version: "3.14.4"
+          enable-cache: true
+      - run: uv sync --python 3.14.4
+      - name: Promote
+        run: |
+          uv run llmops promote \
+            "${{ inputs.prompt_name }}" \
+            "${{ inputs.from_alias }}" \
+            "${{ inputs.to_alias }}"
