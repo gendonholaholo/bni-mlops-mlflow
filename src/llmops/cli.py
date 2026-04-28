@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 import urllib.request
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
 
 import typer
+import yaml
 
 app = typer.Typer(
     name="llmops",
@@ -63,6 +65,54 @@ def doctor(
     except Exception as e:  # noqa: BLE001
         typer.echo(f"[fail] MLflow unreachable at {uri}: {e}")
         failed = True
+
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command(name="register-prompts")
+def register_prompts(
+    directory: Path = typer.Argument(Path("prompts"), help="Directory containing *.yaml prompts"),  # noqa: B008
+    set_staging: bool = typer.Option(
+        True,
+        "--set-staging/--no-set-staging",
+        help="After registering, set 'staging' alias to each registered version (default: on).",
+    ),
+) -> None:
+    """Bulk-register every *.yaml in DIRECTORY (idempotent). After registering,
+    set the `staging` alias to the resulting version for each prompt — this is
+    the locked CI behavior for `register-prompts.yml` on merge to gos-dev."""
+    # Lazy imports — keep CLI startup fast and avoid pulling SDK deps unless needed
+    from llmops.prompts import register_prompt as _reg
+    from llmops.prompts import set_alias as _set_alias
+    from prompts._schema import PromptYAML
+
+    paths = sorted(directory.glob("*.yaml"))
+    if not paths:
+        typer.echo(f"No prompts found in {directory}")
+        raise typer.Exit(code=0)
+
+    failed = 0
+    for p in paths:
+        if p.name.startswith("_"):
+            continue
+        try:
+            data = yaml.safe_load(p.read_text())
+            schema = PromptYAML(**data)
+            if schema.name != p.stem:
+                raise ValueError(f"filename stem {p.stem!r} != name {schema.name!r}")
+            result = _reg(
+                name=schema.name,
+                template=schema.template,
+                commit_message=os.environ.get("GITHUB_SHA", ""),
+                tags=schema.tags,
+            )
+            if set_staging:
+                _set_alias(schema.name, alias="staging", version=result.version)
+            typer.echo(f"[ok]   {schema.name} v{result.version} (staging alias set)")
+        except Exception as e:  # noqa: BLE001
+            typer.echo(f"[fail] {p.name}: {e}")
+            failed += 1
 
     if failed:
         raise typer.Exit(code=1)
