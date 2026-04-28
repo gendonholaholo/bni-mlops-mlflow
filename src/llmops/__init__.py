@@ -19,7 +19,7 @@ Configuration via environment variables only (read on first call):
 
 from __future__ import annotations
 
-from llmops._autolog import autolog
+from llmops._autolog import SUPPORTED_PROVIDERS, autolog
 from llmops.exceptions import (
     LLMOpsConfigError,
     LLMOpsError,
@@ -40,6 +40,7 @@ __all__ = [
     "LLMOpsError",
     "LLMOpsPromptNotFoundError",
     "LLMOpsValidationError",
+    "SUPPORTED_PROVIDERS",
     "SpanType",
     "autolog",
     "load_prompt",

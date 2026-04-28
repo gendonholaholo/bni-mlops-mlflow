@@ -27,11 +27,12 @@ def fake_mlflow_for_tracing(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicM
     mod.set_tracking_uri = MagicMock()  # type: ignore[attr-defined]
     mod.set_experiment = MagicMock()  # type: ignore[attr-defined]
     mod.set_tag = MagicMock()  # type: ignore[attr-defined]
-    mod.set_prompt_alias = MagicMock()  # type: ignore[attr-defined]
+    mod.update_current_trace = MagicMock()  # type: ignore[attr-defined]
     mod.MlflowClient = MagicMock(return_value=client_mock)  # type: ignore[attr-defined]
     genai = types.ModuleType("mlflow.genai")
     genai.register_prompt = MagicMock()  # type: ignore[attr-defined]
     genai.load_prompt = MagicMock()  # type: ignore[attr-defined]
+    genai.set_prompt_alias = MagicMock()  # type: ignore[attr-defined]
     mod.genai = genai  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "mlflow", mod)
@@ -326,55 +327,67 @@ def test_span_type_constants_are_strings() -> None:
 
 # Tier 1.2: set_trace_tags / set_trace_metadata ----------------------------
 
-def test_set_trace_tags_writes_attributes_on_root_span(
+def test_set_trace_tags_calls_update_current_trace(
     fake_mlflow_for_tracing: dict[str, MagicMock],
 ) -> None:
+    """Issue #3: tags must reach TraceInfo.tags via update_current_trace, not
+    span attributes — only the former populates Sessions tab and search filters."""
     from llmops.tracing import set_trace_tags, trace_agent
 
-    client = fake_mlflow_for_tracing["client"]
-    root_span = MagicMock()
-    root_span.trace_id = "r1"
-    root_span.span_id = "s1"
-    client.start_trace.return_value = root_span
+    with trace_agent("chatbot"):
+        set_trace_tags(team="alpha", env="prod")
 
-    inner_span = MagicMock()
-    inner_span.trace_id = "r1"
-    inner_span.span_id = "s2"
-    client.start_span.return_value = inner_span
-
-    with trace_agent("orch"):  # noqa: SIM117
-        with trace_agent("inner"):
-            set_trace_tags(team="alpha", env="prod")
-
-    # Tags always land on root, not the active inner span.
-    root_span.set_attributes.assert_called_once_with({"team": "alpha", "env": "prod"})
-    inner_span.set_attributes.assert_not_called()
+    fake_mlflow_for_tracing["mlflow"].update_current_trace.assert_called_once_with(
+        tags={"team": "alpha", "env": "prod"}
+    )
 
 
-def test_set_trace_tags_outside_trace_is_noop(
+def test_set_trace_tags_coerces_values_to_string(
     fake_mlflow_for_tracing: dict[str, MagicMock],
 ) -> None:
+    """MLflow's tags signature is dict[str, str]; non-string values must be
+    coerced at the SDK boundary so consumers can pass ints/floats naturally."""
+    from llmops.tracing import set_trace_tags, trace_agent
+
+    with trace_agent("chatbot"):
+        set_trace_tags(retry_count=3, latency_ms=124.5, version=2)
+
+    fake_mlflow_for_tracing["mlflow"].update_current_trace.assert_called_once_with(
+        tags={"retry_count": "3", "latency_ms": "124.5", "version": "2"}
+    )
+
+
+def test_set_trace_tags_outside_trace_does_not_raise(
+    fake_mlflow_for_tracing: dict[str, MagicMock],
+) -> None:
+    """Outside an active trace, MLflow logs a warning and the call is a no-op
+    on its side. We still pass through — never raise."""
     from llmops.tracing import set_trace_tags
 
     set_trace_tags(team="alpha")  # no exception
 
 
+def test_set_trace_tags_empty_kwargs_skips_call(
+    fake_mlflow_for_tracing: dict[str, MagicMock],
+) -> None:
+    from llmops.tracing import set_trace_tags
+
+    set_trace_tags()
+    fake_mlflow_for_tracing["mlflow"].update_current_trace.assert_not_called()
+
+
 def test_set_trace_metadata_uses_canonical_keys(
     fake_mlflow_for_tracing: dict[str, MagicMock],
 ) -> None:
+    """Issue #3: writes to TraceInfo.request_metadata under
+    mlflow.trace.session / mlflow.trace.user — what the Sessions tab reads."""
     from llmops.tracing import set_trace_metadata, trace_agent
-
-    client = fake_mlflow_for_tracing["client"]
-    root_span = MagicMock()
-    root_span.trace_id = "r1"
-    root_span.span_id = "s1"
-    client.start_trace.return_value = root_span
 
     with trace_agent("chatbot"):
         set_trace_metadata(session_id="sess-42", user_id="alice")
 
-    root_span.set_attributes.assert_called_once_with(
-        {"mlflow.trace.session": "sess-42", "mlflow.trace.user": "alice"}
+    fake_mlflow_for_tracing["mlflow"].update_current_trace.assert_called_once_with(
+        metadata={"mlflow.trace.session": "sess-42", "mlflow.trace.user": "alice"}
     )
 
 
@@ -384,33 +397,37 @@ def test_set_trace_metadata_partial(
     """Only set keys for the IDs that were actually provided."""
     from llmops.tracing import set_trace_metadata, trace_agent
 
-    client = fake_mlflow_for_tracing["client"]
-    root_span = MagicMock()
-    root_span.trace_id = "r1"
-    root_span.span_id = "s1"
-    client.start_trace.return_value = root_span
-
     with trace_agent("chatbot"):
         set_trace_metadata(session_id="sess-42")
 
-    root_span.set_attributes.assert_called_once_with({"mlflow.trace.session": "sess-42"})
+    fake_mlflow_for_tracing["mlflow"].update_current_trace.assert_called_once_with(
+        metadata={"mlflow.trace.session": "sess-42"}
+    )
 
 
-def test_set_trace_metadata_no_args_is_noop(
+def test_set_trace_metadata_no_args_skips_call(
     fake_mlflow_for_tracing: dict[str, MagicMock],
 ) -> None:
     from llmops.tracing import set_trace_metadata, trace_agent
 
-    client = fake_mlflow_for_tracing["client"]
-    root_span = MagicMock()
-    root_span.trace_id = "r1"
-    root_span.span_id = "s1"
-    client.start_trace.return_value = root_span
-
     with trace_agent("chatbot"):
         set_trace_metadata()
 
-    root_span.set_attributes.assert_not_called()
+    fake_mlflow_for_tracing["mlflow"].update_current_trace.assert_not_called()
+
+
+def test_set_trace_tags_disabled_is_noop(
+    fake_mlflow_for_tracing: dict[str, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLMOPS_DISABLE_TRACING", "true")
+    sys.modules.pop("llmops._config", None)
+    sys.modules.pop("llmops.tracing", None)
+
+    from llmops.tracing import set_trace_tags
+
+    set_trace_tags(team="alpha")
+    fake_mlflow_for_tracing["mlflow"].update_current_trace.assert_not_called()
 
 
 # Tier 1.3: set_outputs / decorator auto-capture ---------------------------

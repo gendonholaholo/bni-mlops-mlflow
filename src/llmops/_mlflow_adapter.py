@@ -72,8 +72,10 @@ class MLflowAdapter:
         return mlflow.genai.load_prompt(name_or_uri=uri)
 
     def set_alias(self, name: str, alias: str, version: int) -> None:
-        # NOTE: this lives on mlflow.* (root namespace), NOT mlflow.genai.*
-        mlflow.set_prompt_alias(name, alias, version)
+        # MLflow 3.x moved prompt-registry APIs into the genai namespace.
+        # The root-level ``mlflow.set_prompt_alias`` still works in 3.11.x but
+        # emits a FutureWarning on every call — use ``mlflow.genai`` directly.
+        mlflow.genai.set_prompt_alias(name, alias, version)
 
     def write_prompt_version_tags(self, name: str, version: int, tags: dict[str, str]) -> None:
         """Write each (key, value) in `tags` as a tag on the given prompt version

@@ -15,11 +15,12 @@ def fake_mlflow_for_prompts(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicM
     mod.set_tracking_uri = MagicMock()  # type: ignore[attr-defined]
     mod.set_experiment = MagicMock()  # type: ignore[attr-defined]
     mod.set_tag = MagicMock()  # type: ignore[attr-defined]
-    mod.set_prompt_alias = MagicMock()  # type: ignore[attr-defined]
+    mod.update_current_trace = MagicMock()  # type: ignore[attr-defined]
     mod.MlflowClient = MagicMock()  # type: ignore[attr-defined]
     genai = types.ModuleType("mlflow.genai")
     genai.register_prompt = MagicMock()  # type: ignore[attr-defined]
     genai.load_prompt = MagicMock()  # type: ignore[attr-defined]
+    genai.set_prompt_alias = MagicMock()  # type: ignore[attr-defined]
     mod.genai = genai  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "mlflow", mod)
@@ -217,7 +218,7 @@ def test_set_alias_writes_audit_tags(
     set_alias("agent_tujuan", alias="production", version=3, from_alias="staging")
 
     # The alias pointer was moved on the root mlflow namespace
-    fake_mlflow_for_prompts["mlflow"].set_prompt_alias.assert_called_once_with(
+    fake_mlflow_for_prompts["genai"].set_prompt_alias.assert_called_once_with(
         "agent_tujuan", "production", 3
     )
 

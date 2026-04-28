@@ -16,6 +16,8 @@ def test_public_api_surface() -> None:
     assert callable(llmops.autolog)
     assert hasattr(llmops, "SpanType")
     assert llmops.SpanType.AGENT == "AGENT"
+    assert isinstance(llmops.SUPPORTED_PROVIDERS, frozenset)
+    assert "openai" in llmops.SUPPORTED_PROVIDERS
     assert hasattr(llmops, "LLMOpsError")
     assert hasattr(llmops, "LLMOpsConfigError")
     assert hasattr(llmops, "LLMOpsPromptNotFoundError")

@@ -19,7 +19,6 @@ def fake_mlflow(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     mod.set_tracking_uri = MagicMock()  # type: ignore[attr-defined]
     mod.set_experiment = MagicMock()  # type: ignore[attr-defined]
     mod.set_tag = MagicMock()  # type: ignore[attr-defined]
-    mod.set_prompt_alias = MagicMock()  # type: ignore[attr-defined]
 
     genai = types.ModuleType("mlflow.genai")
     genai.register_prompt = MagicMock(  # type: ignore[attr-defined]
@@ -28,6 +27,7 @@ def fake_mlflow(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     genai.load_prompt = MagicMock(  # type: ignore[attr-defined]
         return_value=types.SimpleNamespace(name="x", version=1, template="t")
     )
+    genai.set_prompt_alias = MagicMock()  # type: ignore[attr-defined]
     mod.genai = genai  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "mlflow", mod)
@@ -96,12 +96,13 @@ def test_adapter_register_prompt_with_model_config(fake_mlflow: MagicMock) -> No
     )
 
 
-def test_adapter_set_alias_calls_root_namespace(fake_mlflow: MagicMock) -> None:
-    """set_prompt_alias is on mlflow.* not mlflow.genai.* — adapter must use the right one."""
+def test_adapter_set_alias_calls_genai_namespace(fake_mlflow: MagicMock) -> None:
+    """In MLflow 3.x prompt-registry APIs live under mlflow.genai.* — using
+    the root mlflow.set_prompt_alias still works but emits a FutureWarning."""
     from llmops._mlflow_adapter import MLflowAdapter
 
     cfg = Config(tracking_uri="http://x", experiment_name="e", disable_tracing=False)
     a = MLflowAdapter(cfg)
     a.set_alias("agent_tujuan", alias="staging", version=3)
 
-    fake_mlflow.set_prompt_alias.assert_called_once_with("agent_tujuan", "staging", 3)
+    fake_mlflow.genai.set_prompt_alias.assert_called_once_with("agent_tujuan", "staging", 3)
