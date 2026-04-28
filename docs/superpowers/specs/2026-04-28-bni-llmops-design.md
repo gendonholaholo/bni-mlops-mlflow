@@ -169,7 +169,7 @@ banned-module-level-imports = ["mlflow"]
 
 | Service | Image | Purpose |
 |---|---|---|
-| `mlflow` | `ghcr.io/mlflow/mlflow:v3.11.1` (pinned) | Tracking server, UI, prompt registry, artifact proxy |
+| `mlflow` | `ghcr.io/mlflow/mlflow:v3.11.1-full` (pinned) | Tracking server, UI, prompt registry, artifact proxy |
 | `postgres` | `postgres:18-alpine` (pinned major) | Backend store for runs, experiments, prompts, registered models |
 
 **Volumes (named, persistent across `docker compose down/up`):**
@@ -295,7 +295,7 @@ Run via `uv run llmops <command>`.
 | Python version (SDK + dev) | `3.14.4` (`requires-python = ">=3.14,<3.15"`) | Matches colleague's project version |
 | Ruff `target-version` | `"py314"` | Match Python version |
 | MLflow client lib | `mlflow >= 3.11, < 4` | Latest stable; pin major to avoid breaking changes |
-| MLflow server image | `ghcr.io/mlflow/mlflow:v3.11.1` (pinned patch) | Matches client major; upgrade is an explicit PR |
+| MLflow server image | `ghcr.io/mlflow/mlflow:v3.11.1-full` (pinned patch) | `-full` variant bundles psycopg2 (required for Postgres backend); upgrade is an explicit PR |
 | Postgres image | `postgres:18-alpine` | Latest stable major (Postgres 18) |
 | Package manager | `uv` | Per project standard |
 | Lint + format | `ruff check` + `ruff format` | Per project standard |
@@ -440,7 +440,7 @@ bni-llmops/
 ├── docker-compose.yml          # mlflow + postgres
 ├── docker/
 │   └── mlflow/
-│       └── Dockerfile          # FROM ghcr.io/mlflow/mlflow:v3.11.1 (custom psycopg deps if needed)
+│       └── Dockerfile          # reserved for v2+; v1 uses ghcr.io/mlflow/mlflow:v3.11.1-full directly
 ├── src/
 │   └── llmops/
 │       ├── __init__.py         # public API surface (re-exports)

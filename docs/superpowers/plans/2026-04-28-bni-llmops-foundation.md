@@ -299,6 +299,12 @@ git commit -m "chore(env): add .env.example with documented placeholders"
 **Files:**
 - Create: `docker-compose.yml`
 
+> **Implementation note (post-execution correction, 2026-04-28):** Two deviations from the original yaml below were discovered during smoke testing and approved by user:
+> 1. **Override `PGDATA: /var/lib/postgresql/data` in the postgres `environment:` block** — `postgres:18-alpine` changed PGDATA default to `/var/lib/postgresql/18/docker` (Debian-style multi-version layout), causing the named-volume mount at `/var/lib/postgresql/data` to be silently ignored. Explicit override restores the canonical path so persistence works.
+> 2. **Use `ghcr.io/mlflow/mlflow:v3.11.1-full` (not `:v3.11.1`)** — the minimal `mlflow/mlflow` image does not bundle `psycopg2`, so `--backend-store-uri postgresql://...` fails at startup. The `-full` variant is MLflow's documented pattern for Postgres-backed deployments.
+>
+> The yaml in Step 2 below has been updated to reflect these corrections.
+
 - [ ] **Step 1: Validate the syntax we're about to use**
 
 Fetch `https://docs.docker.com/reference/compose-file/` (or skim our memory of compose v2 spec) and confirm `services`, `volumes`, `healthcheck`, `depends_on` with `condition: service_healthy` are valid. Required.
@@ -314,6 +320,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data
     volumes:
       - llmops_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -323,7 +330,7 @@ services:
       retries: 10
 
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v3.11.1
+    image: ghcr.io/mlflow/mlflow:v3.11.1-full
     restart: unless-stopped
     depends_on:
       postgres:
