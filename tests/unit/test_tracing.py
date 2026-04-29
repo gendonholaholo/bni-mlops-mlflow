@@ -49,10 +49,21 @@ def fake_mlflow_for_tracing(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicM
     tracing_mod.trace_manager = trace_manager_mod  # type: ignore[attr-defined]
     mod.tracing = tracing_mod  # type: ignore[attr-defined]
 
+    # Issue #5 fix: trace_agent calls mlflow.tracing.provider.set_span_in_context
+    # to register the span in MLflow's fluent OTel context so autolog'd spans
+    # (langchain, openai, ...) nest under it instead of starting fresh traces.
+    set_span_in_context_mock = MagicMock(return_value="otel-token")
+    detach_span_from_context_mock = MagicMock()
+    provider_mod = types.ModuleType("mlflow.tracing.provider")
+    provider_mod.set_span_in_context = set_span_in_context_mock  # type: ignore[attr-defined]
+    provider_mod.detach_span_from_context = detach_span_from_context_mock  # type: ignore[attr-defined]
+    tracing_mod.provider = provider_mod  # type: ignore[attr-defined]
+
     monkeypatch.setitem(sys.modules, "mlflow", mod)
     monkeypatch.setitem(sys.modules, "mlflow.genai", genai)
     monkeypatch.setitem(sys.modules, "mlflow.tracing", tracing_mod)
     monkeypatch.setitem(sys.modules, "mlflow.tracing.trace_manager", trace_manager_mod)
+    monkeypatch.setitem(sys.modules, "mlflow.tracing.provider", provider_mod)
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://x:5001")
     sys.modules.pop("llmops._mlflow_adapter", None)
     sys.modules.pop("llmops.tracing", None)
@@ -62,6 +73,8 @@ def fake_mlflow_for_tracing(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicM
         "mlflow": mod,
         "client": client_mock,
         "trace_manager": trace_mgr_instance,
+        "set_span_in_context": set_span_in_context_mock,
+        "detach_span_from_context": detach_span_from_context_mock,
     }
 
 
@@ -586,4 +599,94 @@ def test_trace_agent_set_outputs_on_nested_span_passed_to_end_span(
     end_span_kwargs = client.end_span.call_args.kwargs
     assert end_span_kwargs["outputs"] == 42
 
+
+def test_trace_agent_root_attaches_to_fluent_otel_context(
+    fake_mlflow_for_tracing: dict[str, MagicMock],
+) -> None:
+    """Issue #5: root trace_agent must register in mlflow's fluent OTel context
+    via set_span_in_context so autolog'd integrations (langchain, openai, etc.)
+    that resolve their parent via mlflow.get_current_active_span() see this
+    span and nest under it."""
+    from llmops.tracing import trace_agent
+
+    set_in_ctx = fake_mlflow_for_tracing["set_span_in_context"]
+    detach = fake_mlflow_for_tracing["detach_span_from_context"]
+    client = fake_mlflow_for_tracing["client"]
+
+    with trace_agent("agent_run"):
+        pass
+
+    set_in_ctx.assert_called_once()
+    attached_span = set_in_ctx.call_args.args[0]
+    assert attached_span is client.start_trace.return_value
+    detach.assert_called_once_with("otel-token")
+
+
+def test_trace_agent_nested_attaches_inner_span_to_otel_context(
+    fake_mlflow_for_tracing: dict[str, MagicMock],
+) -> None:
+    """Issue #5: nested trace_agent must replace the fluent active span with
+    the inner span so autolog calls inside the inner block resolve the inner
+    (not outer) as their parent."""
+    from llmops.tracing import trace_agent
+
+    set_in_ctx = fake_mlflow_for_tracing["set_span_in_context"]
+    detach = fake_mlflow_for_tracing["detach_span_from_context"]
+    client = fake_mlflow_for_tracing["client"]
+    inner_span = MagicMock()
+    inner_span.trace_id = "r1"
+    inner_span.span_id = "s_inner"
+    client.start_span.return_value = inner_span
+
+    with trace_agent("outer"):  # noqa: SIM117
+        with trace_agent("inner"):
+            pass
+
+    assert set_in_ctx.call_count == 2
+    outer_attached = set_in_ctx.call_args_list[0].args[0]
+    inner_attached = set_in_ctx.call_args_list[1].args[0]
+    assert outer_attached is client.start_trace.return_value
+    assert inner_attached is inner_span
+    assert detach.call_count == 2
+
+
+def test_trace_agent_detaches_otel_context_before_end_trace(
+    fake_mlflow_for_tracing: dict[str, MagicMock],
+) -> None:
+    """Issue #5: detach must happen BEFORE end_trace so any post-end hooks see
+    the parent OTel context restored — mirrors langchain_tracer.py's
+    try/finally pattern."""
+    from llmops.tracing import trace_agent
+
+    detach = fake_mlflow_for_tracing["detach_span_from_context"]
+    client = fake_mlflow_for_tracing["client"]
+    call_order: list[str] = []
+    detach.side_effect = lambda _t: call_order.append("detach")
+    client.end_trace.side_effect = lambda **_kw: call_order.append("end_trace")
+
+    with trace_agent("root"):
+        pass
+
+    assert call_order == ["detach", "end_trace"]
+
+
+def test_trace_agent_set_span_in_context_failure_does_not_crash(
+    fake_mlflow_for_tracing: dict[str, MagicMock],
+) -> None:
+    """Issue #5: if set_span_in_context raises (unexpected mlflow internals
+    change), trace_agent must still log a warning and complete the trace
+    cleanly — autolog nesting is a 'best-effort' enhancement, not a hard
+    requirement for the trace itself to record."""
+    from llmops.tracing import trace_agent
+
+    set_in_ctx = fake_mlflow_for_tracing["set_span_in_context"]
+    detach = fake_mlflow_for_tracing["detach_span_from_context"]
+    client = fake_mlflow_for_tracing["client"]
+    set_in_ctx.side_effect = RuntimeError("otel context attach failed")
+
+    with trace_agent("root"):
+        pass
+
+    detach.assert_not_called()
+    client.end_trace.assert_called_once()
 
