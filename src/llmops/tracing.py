@@ -192,6 +192,10 @@ class trace_agent(ContextDecorator):  # noqa: N801 (intentional lowercase API su
         self._trace_handle = None
         self._is_root = False
         self._outputs: Any = _UNSET
+        # Issue #5: token returned by set_span_in_context, used to detach the
+        # span from the fluent OTel context on exit. None when tracing is
+        # disabled or the attach call failed (callers fall back gracefully).
+        self._otel_token: Any = None
 
     def __enter__(self) -> trace_agent:
         cfg = get_config()
@@ -217,6 +221,7 @@ class trace_agent(ContextDecorator):  # noqa: N801 (intentional lowercase API su
                 stack.append(handle)
                 if self.span_type:
                     handle.set_span_type(self.span_type)
+                active_span: Any = handle
             else:
                 parent = stack[-1]
                 span = self._client.start_span(
@@ -230,6 +235,25 @@ class trace_agent(ContextDecorator):  # noqa: N801 (intentional lowercase API su
                 stack.append(span)
                 if self.span_type:
                     span.set_span_type(self.span_type)
+                active_span = span
+
+            # Issue #5: register the span in MLflow's fluent/OTel active-span
+            # context so autolog'd integrations (langchain, openai, etc.) that
+            # resolve their parent via mlflow.get_current_active_span() see this
+            # trace_agent span and nest under it. MlflowClient.start_trace and
+            # start_span themselves use start_span_no_context internally, which
+            # intentionally skips this registration — we mirror the pattern
+            # mlflow's own integrations use (see mlflow/langchain/langchain_tracer.py).
+            try:
+                from mlflow.tracing.provider import set_span_in_context  # noqa: TID253, PLC0415
+
+                self._otel_token = set_span_in_context(active_span)
+            except Exception as e:  # noqa: BLE001
+                _log.warning(
+                    "llmops trace_agent('%s') set_span_in_context failed: %r",
+                    self.name,
+                    e,
+                )
         except Exception as e:  # noqa: BLE001
             _log.warning("llmops trace_agent('%s') start failed: %r", self.name, e)
         return self
@@ -242,6 +266,24 @@ class trace_agent(ContextDecorator):  # noqa: N801 (intentional lowercase API su
             stack = _stack()
             if stack:
                 stack.pop()
+            # Issue #5: detach from fluent OTel context BEFORE ending the trace
+            # so any post-end hooks see the parent context restored. Mirrors the
+            # try/finally pattern in mlflow/langchain/langchain_tracer.py.
+            if self._otel_token is not None:
+                try:
+                    from mlflow.tracing.provider import (  # noqa: TID253, PLC0415
+                        detach_span_from_context,
+                    )
+
+                    detach_span_from_context(self._otel_token)
+                except Exception as e:  # noqa: BLE001
+                    _log.warning(
+                        "llmops trace_agent('%s') detach_span_from_context failed: %r",
+                        self.name,
+                        e,
+                    )
+                finally:
+                    self._otel_token = None
             status = "ERROR" if exc_type else "OK"
             end_kwargs: dict[str, Any] = {"status": status}
             if self._outputs is not _UNSET:
